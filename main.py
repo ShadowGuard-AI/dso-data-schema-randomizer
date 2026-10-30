@@ -2,7 +2,7 @@
 import argparse
 import json
 import logging
-import random
+import sys
 import xml.etree.ElementTree as ET
 import csv
 from faker import Faker
@@ -33,6 +33,26 @@ class DataSchemaRandomizer:
         if self.data_format not in ['json', 'xml', 'csv']:
             raise ValueError(f"Unsupported data format: {self.data_format}")
 
+    def randomize_json_value(self, value):
+        """Randomizes individual values based on their type."""
+        # bool is tested before int on purpose: bool is a subclass of
+        # int in Python, so the old order sent every true and false
+        # through the integer branch and the boolean branch never ran.
+        if isinstance(value, bool):
+            return self.fake.boolean()  # Replace with random boolean
+        elif isinstance(value, str):
+            return self.fake.word()  # Replace with random word
+        elif isinstance(value, int):
+            return self.fake.random_int()  # Replace with random integer
+        elif isinstance(value, float):
+            return self.fake.pyfloat()  # Replace with random float
+        elif isinstance(value, list):
+            return [self.randomize_json_value(item) for item in value] # Randomize each item in the list
+        elif isinstance(value, dict):
+            return self.randomize_json_schema(value)  # Recursively randomize nested dictionaries
+        else:
+            return None # Handle unknown data types
+
     def randomize_json_schema(self, input_data):
         """
         Randomizes a JSON schema.
@@ -48,27 +68,16 @@ class DataSchemaRandomizer:
             logging.error("Input data must be a dictionary for JSON format.")
             raise TypeError("Input data must be a dictionary for JSON format.")
 
-        def randomize_value(value):
-            """Randomizes individual values based on their type."""
-            if isinstance(value, str):
-                return self.fake.word()  # Replace with random word
-            elif isinstance(value, int):
-                return self.fake.random_int()  # Replace with random integer
-            elif isinstance(value, float):
-                return self.fake.pyfloat()  # Replace with random float
-            elif isinstance(value, bool):
-                return self.fake.boolean()  # Replace with random boolean
-            elif isinstance(value, list):
-                return [randomize_value(item) for item in value] # Randomize each item in the list
-            elif isinstance(value, dict):
-                return self.randomize_json_schema(value)  # Recursively randomize nested dictionaries
-            else:
-                return None # Handle unknown data types
-        
         randomized_data = {}
         for key, value in input_data.items():
-            randomized_data[self.fake.word()] = randomize_value(value) # Randomize Key and Value
-            
+            # Faker words come from a small vocabulary and can repeat. A
+            # repeated randomized key would silently merge two entries and
+            # shrink the object, so collisions are redrawn.
+            new_key = self.fake.word()
+            while new_key in randomized_data:
+                new_key = self.fake.word()
+            randomized_data[new_key] = self.randomize_json_value(value) # Randomize Key and Value
+
         return randomized_data
 
     def randomize_xml_schema(self, input_xml):
@@ -88,10 +97,14 @@ class DataSchemaRandomizer:
             raise
 
         def randomize_element(element):
-            """Randomizes element tags and text."""
+            """Randomizes element tags, text, and attribute values."""
             element.tag = self.fake.word() # Randomize element tag
             if element.text:
                 element.text = self.fake.word() # Randomize element text
+            # Attribute values are data too: an id attribute kept its real
+            # value while everything around it was randomized.
+            for attr in element.attrib:
+                element.attrib[attr] = self.fake.word()
             for child in element:
                 randomize_element(child)
 
@@ -159,7 +172,14 @@ class DataSchemaRandomizer:
         try:
             if self.data_format == 'json':
                 input_data = json.loads(data)
-                randomized_data = self.randomize_json_schema(input_data)
+                # A top level list of records is valid JSON input, not an
+                # error: randomize each item and keep the list shape.
+                if isinstance(input_data, dict):
+                    randomized_data = self.randomize_json_schema(input_data)
+                elif isinstance(input_data, list):
+                    randomized_data = [self.randomize_json_value(item) for item in input_data]
+                else:
+                    randomized_data = self.randomize_json_value(input_data)
                 output_data = json.dumps(randomized_data, indent=4)
             elif self.data_format == 'xml':
                 output_data = self.randomize_xml_schema(data)
@@ -212,10 +232,13 @@ def main():
         randomizer.process_data()
     except ValueError as e:
         logging.error(f"Value Error: {e}")
+        sys.exit(1)
     except FileNotFoundError as e:
         logging.error(f"File Not Found Error: {e}")
+        sys.exit(1)
     except Exception as e:
         logging.error(f"An unexpected error occurred: {e}")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
