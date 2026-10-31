@@ -14,5 +14,11 @@ Generates random, but structurally valid, schema for various data formats (JSON,
 - `-o`: No description provided
 - `-l`: No description provided
 
+## Behavior
+- An output path that resolves to the input file is refused at exit 1, however it is spelled.
+- Empty input (an empty CSV, an empty JSON object or list) exits non-zero with no success line and writes no output.
+- In XML, each distinct original tag gets one replacement tag, reused at every occurrence, so the structure stays valid.
+- Randomized CSV header names are redrawn on collision, so output header names stay unique.
+
 ## License
 Copyright (c) ShadowGuardAI

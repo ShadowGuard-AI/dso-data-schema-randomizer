@@ -2,6 +2,7 @@
 import argparse
 import json
 import logging
+import os
 import sys
 import xml.etree.ElementTree as ET
 import csv
@@ -96,9 +97,24 @@ class DataSchemaRandomizer:
             logging.error(f"Error parsing XML: {e}")
             raise
 
+        # One replacement per distinct original tag, reused at every
+        # occurrence. A fresh tag per element split sibling elements that
+        # shared a tag into unrelated names and broke the structure a
+        # downstream parser relies on. Collisions with a tag already
+        # assigned to a different original are redrawn, as in JSON keys.
+        tag_map = {}
+
+        def replacement_tag(tag):
+            if tag not in tag_map:
+                new_tag = self.fake.word()
+                while new_tag in tag_map.values():
+                    new_tag = self.fake.word()
+                tag_map[tag] = new_tag
+            return tag_map[tag]
+
         def randomize_element(element):
             """Randomizes element tags, text, and attribute values."""
-            element.tag = self.fake.word() # Randomize element tag
+            element.tag = replacement_tag(element.tag) # Randomize element tag
             if element.text:
                 element.text = self.fake.word() # Randomize element text
             # Attribute values are data too: an id attribute kept its real
@@ -125,14 +141,21 @@ class DataSchemaRandomizer:
         reader = csv.reader(input_csv.splitlines())
         rows = list(reader)
 
-        if not rows:
-            logging.warning("CSV file is empty.")
-            return ""
+        if not rows or not any(cell.strip() for row in rows for cell in row):
+            logging.error("CSV file is empty: nothing to randomize.")
+            raise ValueError("CSV file is empty: nothing to randomize.")
 
         header = rows[0] #get header
 
-        #Randomize Header
-        randomized_header = [self.fake.word() for _ in header]
+        #Randomize Header. Faker words can repeat, and a repeated header
+        #name would merge two columns for a reader keyed by name, so a
+        #colliding name is redrawn, as the JSON path does for keys.
+        randomized_header = []
+        for _ in header:
+            new_name = self.fake.word()
+            while new_name in randomized_header:
+                new_name = self.fake.word()
+            randomized_header.append(new_name)
 
         randomized_rows = [randomized_header]
 
@@ -159,6 +182,13 @@ class DataSchemaRandomizer:
             logging.error("Input file is required.")
             raise ValueError("Input file is required.")
 
+        # Refuse in place output: an output path that resolves to the
+        # input file (same spelling, ./ alias, or symlink) would destroy
+        # the original before anyone can compare the two.
+        if self.output_file and os.path.realpath(self.output_file) == os.path.realpath(self.input_file):
+            logging.error("Output file resolves to the input file; refusing to overwrite it in place.")
+            raise ValueError("Output file resolves to the input file; refusing to overwrite it in place.")
+
         try:
             with open(self.input_file, 'r', encoding='utf-8') as f:
                 data = f.read()
@@ -172,6 +202,12 @@ class DataSchemaRandomizer:
         try:
             if self.data_format == 'json':
                 input_data = json.loads(data)
+                # An empty object or list holds nothing to randomize, so
+                # it fails instead of writing itself back under a success
+                # line.
+                if isinstance(input_data, (dict, list)) and not input_data:
+                    logging.error("JSON input is empty: nothing to randomize.")
+                    raise ValueError("JSON input is empty: nothing to randomize.")
                 # A top level list of records is valid JSON input, not an
                 # error: randomize each item and keep the list shape.
                 if isinstance(input_data, dict):
