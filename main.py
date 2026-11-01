@@ -11,6 +11,13 @@ from faker import Faker
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
+# One honest framing for everything below: despite the class name, this
+# randomizes values as well as names. Every string becomes a Faker word
+# and every number a Faker number, so nothing of the original data
+# survives except the shape: key count, nesting, list length, row and
+# column counts. It is a shape preserving filler, not a masking pass over
+# data anyone can still use, and there is no seed to reproduce a run with.
+
 class DataSchemaRandomizer:
     """
     Generates random, but structurally valid, schema for various data formats.
@@ -119,6 +126,10 @@ class DataSchemaRandomizer:
                 element.text = self.fake.word() # Randomize element text
             # Attribute values are data too: an id attribute kept its real
             # value while everything around it was randomized.
+            # The attribute NAMES are the one thing left exactly as they
+            # were, because renaming them per element would break the
+            # map's own bookkeeping; a name that itself identifies its
+            # owner therefore survives a run untouched.
             for attr in element.attrib:
                 element.attrib[attr] = self.fake.word()
             for child in element:
@@ -159,6 +170,12 @@ class DataSchemaRandomizer:
 
         randomized_rows = [randomized_header]
 
+        # CSV takes the bluntest path of the three formats: every cell,
+        # header or data, number or text, becomes a word, so the type
+        # care the JSON branches take does not exist here. The output is
+        # joined by hand with commas and no quoting, which is safe only
+        # because a Faker word never contains a comma; a row also keeps
+        # exactly the cell count the reader parsed, ragged rows included.
         for row in rows[1:]:
              randomized_row = [self.fake.word() for _ in row]
              randomized_rows.append(randomized_row)
